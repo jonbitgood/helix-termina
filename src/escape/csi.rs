@@ -595,6 +595,15 @@ pub enum Cursor {
 
     /// Response to cursor shape query (kitty multi-cursor protocol).
     CursorShapeQueryResponse(Vec<u8>),
+
+    SetMultipleCursors {
+        /// Cursor shape (29 = follow main cursor shape)
+        shape: u8,
+        /// List of cursor positions (line, col) 1-indexed
+        positions: Vec<(u16, u16)>,
+    },
+
+    ClearSecondaryCursors,
 }
 
 impl Display for Cursor {
@@ -661,6 +670,14 @@ impl Display for Cursor {
                 }
                 write!(f, " q")
             }
+            Cursor::SetMultipleCursors { shape, positions } => {
+                write!(f, ">{}", shape)?;
+                for (line, col) in positions {
+                    write!(f, ";2:{}:{}", line, col)?;
+                }
+                write!(f, " q")
+            }
+            Cursor::ClearSecondaryCursors => write!(f, ">0;4 q"),
         }
     }
 }
