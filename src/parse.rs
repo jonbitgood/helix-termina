@@ -314,6 +314,10 @@ fn parse_csi(buffer: &[u8]) -> Result<Option<Event>> {
             b'y' => return parse_csi_synchronized_output_mode(buffer),
             _ => None,
         },
+        b'>' => match buffer[buffer.len() - 2..buffer.len()] {
+            [b' ', b'q'] => return parse_csi_cursor_shape_query_response(buffer),
+            _ => None,
+        },
         b'0'..=b'9' => {
             // Numbered escape code.
             if buffer.len() == 3 {
@@ -902,6 +906,29 @@ fn parse_csi_cursor_position(buffer: &[u8]) -> Result<Option<Event>> {
 
     Ok(Some(Event::Csi(Csi::Cursor(
         csi::Cursor::ActivePositionReport { line, col },
+    ))))
+}
+
+fn parse_csi_cursor_shape_query_response(buffer: &[u8]) -> Result<Option<Event>> {
+    assert!(buffer.starts_with(b"\x1B[>")); // CSI >
+    assert!(buffer.ends_with(b" q"));
+
+    if buffer.len() < 5 {
+        // Minimum: ESC [ > SP q
+        return Ok(None);
+    }
+
+    let s = str::from_utf8(&buffer[3..buffer.len() - 2])?;
+
+    let shapes: Vec<u8> = s
+        .split(';')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<u8>())
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .map_err(|_| MalformedSequenceError)?;
+
+    Ok(Some(Event::Csi(Csi::Cursor(
+        csi::Cursor::CursorShapeQueryResponse(shapes),
     ))))
 }
 

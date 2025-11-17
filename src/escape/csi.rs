@@ -456,7 +456,7 @@ impl Default for SgrModifiers {
 
 // Cursor
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cursor {
     /// CBT Moves cursor to the Ps tabs backward. The default value of Ps is 1.
     BackwardTabulation(u32),
@@ -592,6 +592,9 @@ pub enum Cursor {
     },
 
     CursorStyle(CursorStyle),
+
+    /// Response to cursor shape query (kitty multi-cursor protocol).
+    CursorShapeQueryResponse(Vec<u8>),
 }
 
 impl Display for Cursor {
@@ -648,6 +651,16 @@ impl Display for Cursor {
                 }
             }
             Cursor::CursorStyle(style) => write!(f, "{} q", *style as u8),
+            Cursor::CursorShapeQueryResponse(shapes) => {
+                write!(f, ">")?;
+                for (i, shape) in shapes.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ";")?;
+                    }
+                    write!(f, "{}", shape)?;
+                }
+                write!(f, " q")
+            }
         }
     }
 }
