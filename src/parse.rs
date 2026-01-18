@@ -24,7 +24,7 @@ use crate::{
     escape::{
         self,
         csi::{self, Csi, KittyKeyboardFlags, ThemeMode},
-        dcs,
+        dcs, osc,
     },
     event::{
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, MediaKeyCode, ModifierKeyCode, Modifiers,
@@ -170,6 +170,7 @@ fn parse_event(buffer: &[u8], maybe_more: bool) -> Result<Option<Event>> {
                         }
                     }
                     b'[' => parse_csi(buffer),
+                    b']' => parse_osc(buffer),
                     b'P' => parse_dcs(buffer),
                     b'\x1B' => Ok(Some(Event::Key(KeyCode::Escape.into()))),
                     _ => parse_event(&buffer[1..], maybe_more).map(|event_option| {
@@ -314,6 +315,24 @@ fn parse_csi(buffer: &[u8]) -> Result<Option<Event>> {
         _ => bail!(),
     };
     Ok(maybe_event)
+}
+
+fn parse_osc(buffer: &[u8]) -> Result<Option<Event>> {
+    assert!(buffer.starts_with(b"\x1B]"));
+    if !buffer.ends_with(b"\x1B\\") {
+        return Ok(None);
+    }
+    let s = str::from_utf8(&buffer[2..buffer.len() - 2])?;
+    let mut split = s.split(';');
+    let index = next_parsed::<u8>(&mut split)?;
+    let Some(color) = osc::DynamicColorNumber::from_index(index) else {
+        bail!()
+    };
+    // This parsing could be expanded, see <https://terminalguide.namepad.de/seq/osc-4/>.
+    Ok(Some(Event::Osc(osc::Osc::ChangeDynamicColors(
+        color,
+        vec![],
+    ))))
 }
 
 fn next_parsed<T>(iter: &mut dyn Iterator<Item = &str>) -> Result<T>
