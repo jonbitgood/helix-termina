@@ -9,6 +9,15 @@
 // the buffer until it becomes valid or invalid. WezTerm and Alacritty have more formal parsers
 // (`vtparse` and `vte`, respectively) but I'm unsure of using a terminal program's parser since
 // it may be larger or more complex than an application needs.
+
+#[cfg(windows)]
+pub mod windows;
+
+#[cfg(all(windows, feature = "windows-legacy"))]
+use windows::legacy;
+#[cfg(windows)]
+use windows::InputReaderMode;
+
 use std::{collections::VecDeque, num::NonZeroU16, str};
 
 use crate::{
@@ -30,6 +39,12 @@ pub struct Parser {
     buffer: Vec<u8>,
     /// Events which have been parsed. Pop out with `Self::pop`.
     events: VecDeque<Event>,
+    #[cfg(windows)]
+    mode: InputReaderMode,
+    #[cfg(all(windows, feature = "windows-legacy"))]
+    surrogate_buffer: Option<u16>,
+    #[cfg(all(windows, feature = "windows-legacy"))]
+    mouse_buttons_pressed: legacy::MouseButtonsPressed,
 }
 
 impl Default for Parser {
@@ -37,11 +52,27 @@ impl Default for Parser {
         Self {
             buffer: Vec::with_capacity(256),
             events: VecDeque::with_capacity(32),
+            #[cfg(windows)]
+            mode: InputReaderMode::Vte,
+            #[cfg(all(windows, feature = "windows-legacy"))]
+            surrogate_buffer: None,
+            #[cfg(all(windows, feature = "windows-legacy"))]
+            mouse_buttons_pressed: legacy::MouseButtonsPressed::default(),
         }
     }
 }
 
 impl Parser {
+    // The parser is publicly accessible, but we don't currently expose methods for parsing input records, just VTE.
+    // So there's no need to make this public.
+    #[cfg(windows)]
+    pub(crate) fn with_mode(mode: InputReaderMode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+
     /// Reads and removes a parsed event from the parser.
     pub fn pop(&mut self) -> Option<Event> {
         self.events.pop_front()
@@ -82,64 +113,6 @@ impl Parser {
         let remain = self.buffer.len() - len;
         self.buffer.rotate_left(len);
         self.buffer.truncate(remain);
-    }
-}
-
-// CREDIT: <https://github.com/wezterm/wezterm/blob/a87358516004a652ad840bc1661bdf65ffc89b43/termwiz/src/input.rs#L676-L885>
-// I have dropped the legacy Console API handling however and switched to the `AsciiChar` part of
-// the key record. I suspect that Termwiz may be incorrect here as the Microsoft docs say that the
-// proper way to read UTF-8 is to use the `A` variant (`ReadConsoleInputA` while WezTerm uses
-// `ReadConsoleInputW`) to read a byte.
-#[cfg(windows)]
-mod windows {
-    use windows_sys::Win32::System::Console;
-
-    use crate::{OneBased, WindowSize};
-
-    use super::*;
-
-    impl Parser {
-        pub(crate) fn decode_input_records(&mut self, records: &[Console::INPUT_RECORD]) {
-            for record in records {
-                match record.EventType as u32 {
-                    Console::KEY_EVENT => {
-                        let record = unsafe { record.Event.KeyEvent };
-                        // This skips 'down's. IIRC Termwiz skips 'down's and Crossterm skips
-                        // 'up's. If we skip 'up's we don't seem to get key events at all.
-                        if record.bKeyDown == 0 {
-                            continue;
-                        }
-                        let byte = unsafe { record.uChar.AsciiChar } as u8;
-                        // The zero byte is sent when the input record is not VT.
-                        if byte == 0 {
-                            continue;
-                        }
-                        // `read_console_input` uses `ReadConsoleInputA` so we should treat the
-                        // key code as a byte and add it to the buffer.
-                        self.buffer.push(byte);
-                    }
-                    Console::WINDOW_BUFFER_SIZE_EVENT => {
-                        // NOTE: the `WINDOW_BUFFER_SIZE_EVENT` coordinates are one-based, even
-                        // though `GetConsoleScreenBufferInfo` is zero-based.
-                        let record = unsafe { record.Event.WindowBufferSizeEvent };
-                        let Some(rows) = OneBased::new(record.dwSize.Y as u16) else {
-                            continue;
-                        };
-                        let Some(cols) = OneBased::new(record.dwSize.X as u16) else {
-                            continue;
-                        };
-                        self.events.push_back(Event::WindowResized(WindowSize {
-                            rows: rows.get(),
-                            cols: cols.get(),
-                            pixel_width: None,
-                            pixel_height: None,
-                        }));
-                    }
-                    _ => (),
-                }
-            }
-            self.process_bytes(false);
-        }
     }
 }
 

@@ -7,7 +7,7 @@ use std::{io, os::windows::prelude::*, ptr, sync::Arc, time::Duration};
 
 use windows_sys::Win32::System::Threading;
 
-use crate::{event::Event, parse::Parser, terminal::InputHandle};
+use crate::{event::Event, parse::Parser, terminal::InputHandle, windows::InputReaderMode};
 
 use super::{EventSource, PollTimeout};
 
@@ -19,10 +19,10 @@ pub struct WindowsEventSource {
 }
 
 impl WindowsEventSource {
-    pub(crate) fn new(input: InputHandle) -> io::Result<Self> {
+    pub(crate) fn new(input: InputHandle, mode: InputReaderMode) -> io::Result<Self> {
         Ok(Self {
             input,
-            parser: Parser::default(),
+            parser: Parser::with_mode(mode),
             waker: Arc::new(EventHandle::new()?),
         })
     }

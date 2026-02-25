@@ -2,10 +2,13 @@
 // modifications to adapt to the termina API.
 // <https://github.com/crossterm-rs/crossterm/blob/36d95b26a26e64b0f8c12edfe11f410a6d56a812/examples/event-read.rs>
 use std::{
+    env,
     io::{self, Write as _},
     time::Duration,
 };
 
+#[cfg(windows)]
+use termina::windows;
 use termina::{
     escape::csi::{self, KittyKeyboardFlags},
     event::{KeyCode, KeyEvent},
@@ -36,16 +39,36 @@ macro_rules! decreset {
 fn main() -> io::Result<()> {
     println!("{HELP}");
 
+    let args: Vec<_> = env::args().collect();
+    let windows_legacy = cfg!(windows) && args.iter().any(|a| a == "--windows-legacy");
+
+    #[cfg(windows)]
+    let mut terminal = PlatformTerminal::with_mode(if windows_legacy {
+        windows::InputReaderMode::Legacy
+    } else {
+        windows::InputReaderMode::Vte
+    })?;
+    #[cfg(not(windows))]
     let mut terminal = PlatformTerminal::new()?;
+
     terminal.enter_raw_mode()?;
 
+    let keyboard_flags = if windows_legacy {
+        // Enabling the kitty keyboard protocol in a supported terminal
+        // while using the legacy console API will result in incorrect key codes
+        // for some key combinations.
+        "".to_string()
+    } else {
+        csi::Csi::Keyboard(csi::Keyboard::PushFlags(
+            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KittyKeyboardFlags::REPORT_ALTERNATE_KEYS,
+        ))
+        .to_string()
+    };
     write!(
         terminal,
         "{}{}{}{}{}{}{}{}",
-        csi::Csi::Keyboard(csi::Keyboard::PushFlags(
-            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KittyKeyboardFlags::REPORT_ALTERNATE_KEYS
-        )),
+        keyboard_flags,
         decset!(FocusTracking),
         decset!(BracketedPaste),
         decset!(MouseTracking),
@@ -71,32 +94,43 @@ fn main() -> io::Result<()> {
                 code: KeyCode::Char('c'),
                 ..
             }) => {
-                write!(
-                    terminal,
-                    "{}",
-                    csi::Csi::Cursor(csi::Cursor::RequestActivePositionReport),
-                )?;
-                terminal.flush()?;
-                let filter = |event: &Event| {
-                    matches!(
-                        event,
-                        Event::Csi(csi::Csi::Cursor(csi::Cursor::ActivePositionReport { .. }))
-                    )
-                };
-                if terminal.poll(filter, Some(Duration::from_millis(50)))? {
-                    let Event::Csi(csi::Csi::Cursor(csi::Cursor::ActivePositionReport {
-                        line,
-                        col,
-                    })) = terminal.read(filter)?
-                    else {
-                        unreachable!()
-                    };
-                    println!(
-                        "Cursor position: {:?}\r",
-                        (line.get_zero_based(), col.get_zero_based())
-                    );
+                if windows_legacy {
+                    #[cfg(windows)]
+                    {
+                        let (line, col) = termina::windows::cursor_position()?;
+                        println!(
+                            "Cursor position: {:?}\r",
+                            (line.get_zero_based(), col.get_zero_based())
+                        );
+                    }
                 } else {
-                    eprintln!("Failed to read the cursor position within 50msec\r");
+                    write!(
+                        terminal,
+                        "{}",
+                        csi::Csi::Cursor(csi::Cursor::RequestActivePositionReport),
+                    )?;
+                    terminal.flush()?;
+                    let filter = |event: &Event| {
+                        matches!(
+                            event,
+                            Event::Csi(csi::Csi::Cursor(csi::Cursor::ActivePositionReport { .. }))
+                        )
+                    };
+                    if terminal.poll(filter, Some(Duration::from_millis(50)))? {
+                        let Event::Csi(csi::Csi::Cursor(csi::Cursor::ActivePositionReport {
+                            line,
+                            col,
+                        })) = terminal.read(filter)?
+                        else {
+                            unreachable!()
+                        };
+                        println!(
+                            "Cursor position: {:?}\r",
+                            (line.get_zero_based(), col.get_zero_based())
+                        );
+                    } else {
+                        eprintln!("Failed to read the cursor position within 50msec\r");
+                    }
                 }
             }
             Event::WindowResized(dimensions) => {
@@ -108,10 +142,15 @@ fn main() -> io::Result<()> {
         }
     }
 
+    let keyboard_flags = if windows_legacy {
+        "".to_string()
+    } else {
+        csi::Csi::Keyboard(csi::Keyboard::PopFlags(1)).to_string()
+    };
     write!(
         terminal,
         "{}{}{}{}{}{}{}{}",
-        csi::Csi::Keyboard(csi::Keyboard::PopFlags(1)),
+        keyboard_flags,
         decreset!(FocusTracking),
         decreset!(BracketedPaste),
         decreset!(MouseTracking),

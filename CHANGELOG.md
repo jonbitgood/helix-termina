@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* Implement legacy console API for Windows ([#16](https://github.com/helix-editor/termina/pull/16))
+
 ### Fixed
 
 * Fix reading VT data which includes non-ASCII characters from Windows ([#15](https://github.com/helix-editor/termina/pull/15))
