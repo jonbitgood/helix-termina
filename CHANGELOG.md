@@ -5,11 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+<!-- ## [Unreleased] -->
+
+## [v0.2.0] - 2026-03-14
 
 ### Added
 
 * Implement legacy console API for Windows ([#16](https://github.com/helix-editor/termina/pull/16))
+* Add OSC sequences for changing and resetting terminal colors ([#17](https://github.com/helix-editor/termina/pull/17))
 
 ### Fixed
 
