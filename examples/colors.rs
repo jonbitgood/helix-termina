@@ -21,10 +21,7 @@ fn main() -> io::Result<()> {
         ))),
         Osc::ChangeDynamicColors(DynamicColorNumber::TextForegroundColor, vec![RgbColor::new(128, 128, 255).into()]),
         Osc::ChangeDynamicColors(DynamicColorNumber::TextBackgroundColor, vec![RgbColor::new(0, 64, 0).into()]),
-        Csi::Cursor(csi::Cursor::Position {
-            line: Default::default(),
-            col: Default::default(),
-        }),
+        Csi::Cursor(csi::Cursor::default_position()),
     )?;
     terminal.flush()?;
     let _ = terminal.read(|event| matches!(event, termina::Event::Key(_)));
