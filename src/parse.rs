@@ -920,15 +920,27 @@ fn parse_csi_cursor_shape_query_response(buffer: &[u8]) -> Result<Option<Event>>
 
     let s = str::from_utf8(&buffer[3..buffer.len() - 2])?;
 
-    let shapes: Vec<u8> = s
+    // An empty parameter string (CSI > SP q) is a query.
+    if s.is_empty() {
+        return Ok(Some(Event::Csi(Csi::Cursor(
+            csi::Cursor::QueryCursorShape,
+        ))));
+    }
+
+    let styles: Vec<style::CursorStyle> = s
         .split(';')
         .filter(|part| !part.is_empty())
-        .map(|part| part.parse::<u8>())
-        .collect::<std::result::Result<Vec<u8>, _>>()
-        .map_err(|_| MalformedSequenceError)?;
+        .map(|part| {
+            part.parse::<u8>()
+                .map_err(|_| MalformedSequenceError)
+                .and_then(|v| {
+                    style::CursorStyle::try_from(v).map_err(|_| MalformedSequenceError)
+                })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(Some(Event::Csi(Csi::Cursor(
-        csi::Cursor::CursorShapeQueryResponse(shapes),
+        csi::Cursor::CursorShapeQueryResponse(styles),
     ))))
 }
 
@@ -1209,5 +1221,47 @@ mod test {
                 ])
             })
         );
+    }
+
+    #[test]
+    fn parse_cursor_shape_query() {
+        // CSI > SP q with no parameters is a query.
+        let event = parse_event(b"\x1b[> q", false).unwrap().unwrap();
+        assert_eq!(
+            event,
+            Event::Csi(Csi::Cursor(csi::Cursor::QueryCursorShape))
+        );
+    }
+
+    #[test]
+    fn parse_cursor_shape_query_response() {
+        // CSI > 2 ; 4 SP q is a response with SteadyBlock and SteadyUnderline.
+        let event = parse_event(b"\x1b[>2;4 q", false).unwrap().unwrap();
+        assert_eq!(
+            event,
+            Event::Csi(Csi::Cursor(csi::Cursor::CursorShapeQueryResponse(vec![
+                style::CursorStyle::SteadyBlock,
+                style::CursorStyle::SteadyUnderline,
+            ])))
+        );
+    }
+
+    #[test]
+    fn parse_cursor_shape_query_response_invalid() {
+        // Value 7 is not a valid CursorStyle.
+        assert!(parse_event(b"\x1b[>7 q", false).is_err());
+    }
+
+    #[test]
+    fn cursor_shape_query_response_round_trip() {
+        let response = csi::Cursor::CursorShapeQueryResponse(vec![
+            style::CursorStyle::SteadyBlock,
+            style::CursorStyle::BlinkingBar,
+        ]);
+        let encoded = Csi::Cursor(response.clone()).to_string();
+        assert_eq!(encoded, "\x1b[>2;5 q");
+
+        let parsed = parse_event(encoded.as_bytes(), false).unwrap().unwrap();
+        assert_eq!(parsed, Event::Csi(Csi::Cursor(response)));
     }
 }

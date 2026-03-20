@@ -456,6 +456,35 @@ impl Default for SgrModifiers {
 
 // Cursor
 
+/// The cursor shape for the kitty multi-cursor protocol.
+/// This represents either a specific `CursorStyle` (protocol values 0-6)
+/// or the special "follow main cursor" value (protocol value 29).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiCursorShape {
+    Style(CursorStyle),
+    FollowMainCursor,
+}
+
+impl MultiCursorShape {
+    pub fn protocol_value(&self) -> u8 {
+        match self {
+            Self::Style(style) => *style as u8,
+            Self::FollowMainCursor => 29,
+        }
+    }
+}
+
+impl TryFrom<u8> for MultiCursorShape {
+    type Error = u8;
+
+    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
+        match value {
+            29 => Ok(Self::FollowMainCursor),
+            _ => CursorStyle::try_from(value).map(Self::Style),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cursor {
     /// CBT Moves cursor to the Ps tabs backward. The default value of Ps is 1.
@@ -592,15 +621,14 @@ pub enum Cursor {
     },
 
     CursorStyle(CursorStyle),
+    QueryCursorShape,
 
     /// Response to cursor shape query (kitty multi-cursor protocol).
-    CursorShapeQueryResponse(Vec<u8>),
+    CursorShapeQueryResponse(Vec<CursorStyle>),
 
     SetMultipleCursors {
-        /// Cursor shape (29 = follow main cursor shape)
-        shape: u8,
-        /// List of cursor positions (line, col) 1-indexed
-        positions: Vec<(u16, u16)>,
+        shape: MultiCursorShape,
+        positions: Vec<(OneBased, OneBased)>,
     },
 
     ClearSecondaryCursors,
@@ -660,18 +688,19 @@ impl Display for Cursor {
                 }
             }
             Cursor::CursorStyle(style) => write!(f, "{} q", *style as u8),
-            Cursor::CursorShapeQueryResponse(shapes) => {
+            Cursor::QueryCursorShape => write!(f, "> q"),
+            Cursor::CursorShapeQueryResponse(styles) => {
                 write!(f, ">")?;
-                for (i, shape) in shapes.iter().enumerate() {
+                for (i, style) in styles.iter().enumerate() {
                     if i > 0 {
                         write!(f, ";")?;
                     }
-                    write!(f, "{}", shape)?;
+                    write!(f, "{}", *style as u8)?;
                 }
                 write!(f, " q")
             }
             Cursor::SetMultipleCursors { shape, positions } => {
-                write!(f, ">{}", shape)?;
+                write!(f, ">{}", shape.protocol_value())?;
                 for (line, col) in positions {
                     write!(f, ";2:{}:{}", line, col)?;
                 }
@@ -1548,5 +1577,73 @@ mod test {
         // sequence up in the middle: that would make it nonsense.
         attributes.parameter_chunk_size = NonZeroU16::new(12).unwrap();
         assert_eq!(expected, Csi::Sgr(Sgr::Attributes(attributes)).to_string());
+    }
+
+    #[test]
+    fn multi_cursor_encoding() {
+        // QueryCursorShape
+        assert_eq!(
+            "\x1b[> q",
+            Csi::Cursor(Cursor::QueryCursorShape).to_string()
+        );
+
+        // CursorShapeQueryResponse with typed CursorStyle values
+        assert_eq!(
+            "\x1b[>2;4 q",
+            Csi::Cursor(Cursor::CursorShapeQueryResponse(vec![
+                CursorStyle::SteadyBlock,
+                CursorStyle::SteadyUnderline,
+            ]))
+            .to_string()
+        );
+
+        // SetMultipleCursors with MultiCursorShape::FollowMainCursor
+        assert_eq!(
+            "\x1b[>29;2:1:1;2:2:5 q",
+            Csi::Cursor(Cursor::SetMultipleCursors {
+                shape: MultiCursorShape::FollowMainCursor,
+                positions: vec![
+                    (OneBased::new(1).unwrap(), OneBased::new(1).unwrap()),
+                    (OneBased::new(2).unwrap(), OneBased::new(5).unwrap()),
+                ],
+            })
+            .to_string()
+        );
+
+        // SetMultipleCursors with MultiCursorShape::Style
+        assert_eq!(
+            "\x1b[>2;2:3:10 q",
+            Csi::Cursor(Cursor::SetMultipleCursors {
+                shape: MultiCursorShape::Style(CursorStyle::SteadyBlock),
+                positions: vec![
+                    (OneBased::new(3).unwrap(), OneBased::new(10).unwrap()),
+                ],
+            })
+            .to_string()
+        );
+
+        // ClearSecondaryCursors
+        assert_eq!(
+            "\x1b[>0;4 q",
+            Csi::Cursor(Cursor::ClearSecondaryCursors).to_string()
+        );
+    }
+
+    #[test]
+    fn multi_cursor_shape_try_from() {
+        assert_eq!(
+            MultiCursorShape::try_from(0),
+            Ok(MultiCursorShape::Style(CursorStyle::Default))
+        );
+        assert_eq!(
+            MultiCursorShape::try_from(2),
+            Ok(MultiCursorShape::Style(CursorStyle::SteadyBlock))
+        );
+        assert_eq!(
+            MultiCursorShape::try_from(29),
+            Ok(MultiCursorShape::FollowMainCursor)
+        );
+        assert_eq!(MultiCursorShape::try_from(7), Err(7));
+        assert_eq!(MultiCursorShape::try_from(28), Err(28));
     }
 }
