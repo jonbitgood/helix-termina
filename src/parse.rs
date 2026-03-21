@@ -927,20 +927,20 @@ fn parse_csi_cursor_shape_query_response(buffer: &[u8]) -> Result<Option<Event>>
         ))));
     }
 
-    let styles: Vec<style::CursorStyle> = s
+    let caps: Vec<csi::MultiCursorCapability> = s
         .split(';')
         .filter(|part| !part.is_empty())
         .map(|part| {
             part.parse::<u8>()
                 .map_err(|_| MalformedSequenceError)
                 .and_then(|v| {
-                    style::CursorStyle::try_from(v).map_err(|_| MalformedSequenceError)
+                    csi::MultiCursorCapability::try_from(v).map_err(|_| MalformedSequenceError)
                 })
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(Some(Event::Csi(Csi::Cursor(
-        csi::Cursor::CursorShapeQueryResponse(styles),
+        csi::Cursor::CursorShapeQueryResponse(caps),
     ))))
 }
 
@@ -1235,31 +1235,34 @@ mod test {
 
     #[test]
     fn parse_cursor_shape_query_response() {
-        // CSI > 2 ; 4 SP q is a response with SteadyBlock and SteadyUnderline.
-        let event = parse_event(b"\x1b[>2;4 q", false).unwrap().unwrap();
+        // Kitty responds with the supported operation codes.
+        let event = parse_event(b"\x1b[>1;2;29;100 q", false).unwrap().unwrap();
         assert_eq!(
             event,
             Event::Csi(Csi::Cursor(csi::Cursor::CursorShapeQueryResponse(vec![
-                style::CursorStyle::SteadyBlock,
-                style::CursorStyle::SteadyUnderline,
+                csi::MultiCursorCapability::BlockShape,
+                csi::MultiCursorCapability::BeamShape,
+                csi::MultiCursorCapability::FollowMainCursorShape,
+                csi::MultiCursorCapability::QueryCurrentCursors,
             ])))
         );
     }
 
     #[test]
     fn parse_cursor_shape_query_response_invalid() {
-        // Value 7 is not a valid CursorStyle.
+        // Value 7 is not a valid MultiCursorCapability code.
         assert!(parse_event(b"\x1b[>7 q", false).is_err());
     }
 
     #[test]
     fn cursor_shape_query_response_round_trip() {
         let response = csi::Cursor::CursorShapeQueryResponse(vec![
-            style::CursorStyle::SteadyBlock,
-            style::CursorStyle::BlinkingBar,
+            csi::MultiCursorCapability::BlockShape,
+            csi::MultiCursorCapability::FollowMainCursorShape,
+            csi::MultiCursorCapability::QueryCurrentCursors,
         ]);
         let encoded = Csi::Cursor(response.clone()).to_string();
-        assert_eq!(encoded, "\x1b[>2;5 q");
+        assert_eq!(encoded, "\x1b[>1;29;100 q");
 
         let parsed = parse_event(encoded.as_bytes(), false).unwrap().unwrap();
         assert_eq!(parsed, Event::Csi(Csi::Cursor(response)));

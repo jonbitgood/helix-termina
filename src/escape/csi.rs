@@ -485,6 +485,63 @@ impl TryFrom<u8> for MultiCursorShape {
     }
 }
 
+/// Supported operations in the kitty multi-cursor protocol.
+///
+/// Returned in the capability query response (`CSI > SP q`). Each variant
+/// corresponds to a protocol operation code the terminal advertises support for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiCursorCapability {
+    /// Block cursor shape (code 1).
+    BlockShape,
+    /// Beam cursor shape (code 2).
+    BeamShape,
+    /// Underline cursor shape (code 3).
+    UnderlineShape,
+    /// Follow the main cursor's shape (code 29).
+    FollowMainCursorShape,
+    /// Change the color of text under extra cursors (code 30).
+    TextColor,
+    /// Change the color of extra cursors (code 40).
+    CursorColor,
+    /// Query currently set cursors (code 100).
+    QueryCurrentCursors,
+    /// Query extra cursor colors (code 101).
+    QueryColors,
+}
+
+impl MultiCursorCapability {
+    pub fn code(self) -> u8 {
+        match self {
+            Self::BlockShape => 1,
+            Self::BeamShape => 2,
+            Self::UnderlineShape => 3,
+            Self::FollowMainCursorShape => 29,
+            Self::TextColor => 30,
+            Self::CursorColor => 40,
+            Self::QueryCurrentCursors => 100,
+            Self::QueryColors => 101,
+        }
+    }
+}
+
+impl TryFrom<u8> for MultiCursorCapability {
+    type Error = u8;
+
+    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::BlockShape),
+            2 => Ok(Self::BeamShape),
+            3 => Ok(Self::UnderlineShape),
+            29 => Ok(Self::FollowMainCursorShape),
+            30 => Ok(Self::TextColor),
+            40 => Ok(Self::CursorColor),
+            100 => Ok(Self::QueryCurrentCursors),
+            101 => Ok(Self::QueryColors),
+            _ => Err(value),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cursor {
     /// CBT Moves cursor to the Ps tabs backward. The default value of Ps is 1.
@@ -623,8 +680,11 @@ pub enum Cursor {
     CursorStyle(CursorStyle),
     QueryCursorShape,
 
-    /// Response to cursor shape query (kitty multi-cursor protocol).
-    CursorShapeQueryResponse(Vec<CursorStyle>),
+    /// Capability query response (kitty multi-cursor protocol).
+    ///
+    /// Contains the set of operations the terminal supports. An empty list
+    /// means the protocol is not supported.
+    CursorShapeQueryResponse(Vec<MultiCursorCapability>),
 
     SetMultipleCursors {
         shape: MultiCursorShape,
@@ -689,13 +749,13 @@ impl Display for Cursor {
             }
             Cursor::CursorStyle(style) => write!(f, "{} q", *style as u8),
             Cursor::QueryCursorShape => write!(f, "> q"),
-            Cursor::CursorShapeQueryResponse(styles) => {
+            Cursor::CursorShapeQueryResponse(caps) => {
                 write!(f, ">")?;
-                for (i, style) in styles.iter().enumerate() {
+                for (i, cap) in caps.iter().enumerate() {
                     if i > 0 {
                         write!(f, ";")?;
                     }
-                    write!(f, "{}", *style as u8)?;
+                    write!(f, "{}", cap.code())?;
                 }
                 write!(f, " q")
             }
@@ -1587,12 +1647,14 @@ mod test {
             Csi::Cursor(Cursor::QueryCursorShape).to_string()
         );
 
-        // CursorShapeQueryResponse with typed CursorStyle values
+        // CursorShapeQueryResponse with capability codes
         assert_eq!(
-            "\x1b[>2;4 q",
+            "\x1b[>1;2;29;100 q",
             Csi::Cursor(Cursor::CursorShapeQueryResponse(vec![
-                CursorStyle::SteadyBlock,
-                CursorStyle::SteadyUnderline,
+                MultiCursorCapability::BlockShape,
+                MultiCursorCapability::BeamShape,
+                MultiCursorCapability::FollowMainCursorShape,
+                MultiCursorCapability::QueryCurrentCursors,
             ]))
             .to_string()
         );
