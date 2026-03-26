@@ -325,13 +325,20 @@ fn parse_osc(buffer: &[u8]) -> Result<Option<Event>> {
     let s = str::from_utf8(&buffer[2..buffer.len() - 2])?;
     let mut split = s.split(';');
     let index = next_parsed::<u8>(&mut split)?;
-    let Some(color) = osc::DynamicColorNumber::from_index(index) else {
+    let Some(color_number) = osc::DynamicColorNumber::from_index(index) else {
         bail!()
+    };
+    let Some(color_or_query) = split.next() else {
+        bail!()
+    };
+    let response = match color_or_query {
+        "?" => osc::ColorOrQuery::Query,
+        _ => osc::ColorOrQuery::Color(color_or_query.parse().map_err(|_| MalformedSequenceError)?),
     };
     // This parsing could be expanded, see <https://terminalguide.namepad.de/seq/osc-4/>.
     Ok(Some(Event::Osc(osc::Osc::ChangeDynamicColors(
-        color,
-        vec![],
+        color_number,
+        vec![response],
     ))))
 }
 
@@ -1173,6 +1180,19 @@ mod test {
                     csi::Sgr::Reverse(true),
                 ])
             })
+        );
+    }
+
+    #[test]
+    fn parse_osc_dynamic_color_response() {
+        assert_eq!(
+            parse_event(b"\x1b]11;rgb:2828/2828/2828\x1b\\", false)
+                .unwrap()
+                .unwrap(),
+            Event::Osc(osc::Osc::ChangeDynamicColors(
+                osc::DynamicColorNumber::TextBackgroundColor,
+                vec![style::RgbColor::new(40, 40, 40).into()]
+            ))
         );
     }
 }

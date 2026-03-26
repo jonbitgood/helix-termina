@@ -194,5 +194,14 @@ mod test {
             )
             .to_string()
         );
+
+        assert_eq!(
+            "\x1b]11;rgb:2828/2828/2828\x1b\\",
+            Osc::ChangeDynamicColors(
+                DynamicColorNumber::TextBackgroundColor,
+                vec![RgbColor::new(40, 40, 40).into()]
+            )
+            .to_string()
+        );
     }
 }

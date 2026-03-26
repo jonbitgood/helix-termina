@@ -7,6 +7,7 @@
 use std::{
     borrow::Cow,
     fmt::{self, Display},
+    str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -82,6 +83,78 @@ impl RgbColor {
         let green = (green * 255.) as u8;
         let blue = (blue * 255.) as u8;
         Self { red, green, blue }
+    }
+
+    fn channel_from_hex(s: &str) -> Result<u8, InvalidFormatError> {
+        if s.is_empty() || s.len() > 4 {
+            return Err(InvalidFormatError);
+        }
+        let color: u16 = u16::from_str_radix(s, 16).map_err(|_| InvalidFormatError)?;
+        let divisor: usize = match s.len() {
+            1 => 0xf,
+            2 => 0xff,
+            3 => 0xfff,
+            4 => 0xffff,
+            _ => return Err(InvalidFormatError),
+        };
+        Ok(((color as usize) * 0xff / divisor) as u8)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidFormatError;
+
+impl FromStr for RgbColor {
+    type Err = InvalidFormatError;
+
+    // See `man xparsecolor`. This parses colors according to some of the formats accepted by
+    // xterm's `XParseColor` function.
+    //
+    // 1. rgb:<red>/<green>/<blue>
+    //    <red>, <green>, <blue> := h | hh | hhh | hhhh
+    //    h := single hexadecimal digits (case insignificant)
+    // 2. #RGB, #RRGGBB, #RRRGGGBBB, #RRRRGGGGBBBB
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(rgb) = s.strip_prefix("rgb:") {
+            let mut parts = rgb.split('/').map(Self::channel_from_hex);
+            let Some(r) = parts.next().transpose()? else {
+                return Err(InvalidFormatError);
+            };
+            let Some(g) = parts.next().transpose()? else {
+                return Err(InvalidFormatError);
+            };
+            let Some(b) = parts.next().transpose()? else {
+                return Err(InvalidFormatError);
+            };
+            Ok(Self::new(r, g, b))
+        } else if let Some(hex) = s.strip_prefix("#") {
+            let (r, g, b) = match hex.len() {
+                3 => (
+                    Self::channel_from_hex(&hex[0..1])?,
+                    Self::channel_from_hex(&hex[1..2])?,
+                    Self::channel_from_hex(&hex[2..3])?,
+                ),
+                6 => (
+                    Self::channel_from_hex(&hex[0..2])?,
+                    Self::channel_from_hex(&hex[2..4])?,
+                    Self::channel_from_hex(&hex[4..6])?,
+                ),
+                9 => (
+                    Self::channel_from_hex(&hex[0..3])?,
+                    Self::channel_from_hex(&hex[3..6])?,
+                    Self::channel_from_hex(&hex[6..9])?,
+                ),
+                12 => (
+                    Self::channel_from_hex(&hex[0..4])?,
+                    Self::channel_from_hex(&hex[4..8])?,
+                    Self::channel_from_hex(&hex[8..12])?,
+                ),
+                _ => return Err(InvalidFormatError),
+            };
+            Ok(Self::new(r, g, b))
+        } else {
+            Err(InvalidFormatError)
+        }
     }
 }
 
@@ -352,5 +425,17 @@ impl StyleExt<'static> for String {
 impl<'a> StyleExt<'a> for Stylized<'a> {
     fn stylized(self) -> Stylized<'a> {
         self
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parse_color() {
+        assert_eq!("#282828".parse(), Ok(RgbColor::new(40, 40, 40)));
+        assert_eq!("rgb:28/28/28".parse(), Ok(RgbColor::new(40, 40, 40)));
+        assert_eq!("rgb:2828/2828/2828".parse(), Ok(RgbColor::new(40, 40, 40)));
     }
 }
