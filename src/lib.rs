@@ -8,7 +8,10 @@ mod terminal;
 use std::{fmt, num::NonZeroU16};
 
 pub use event::{reader::EventReader, Event};
+#[cfg(windows)]
+pub use parse::windows;
 pub use parse::Parser;
+
 pub use terminal::{PlatformHandle, PlatformTerminal, Terminal};
 
 #[cfg(feature = "event-stream")]

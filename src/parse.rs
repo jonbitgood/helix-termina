@@ -9,13 +9,22 @@
 // the buffer until it becomes valid or invalid. WezTerm and Alacritty have more formal parsers
 // (`vtparse` and `vte`, respectively) but I'm unsure of using a terminal program's parser since
 // it may be larger or more complex than an application needs.
+
+#[cfg(windows)]
+pub mod windows;
+
+#[cfg(all(windows, feature = "windows-legacy"))]
+use windows::legacy;
+#[cfg(windows)]
+use windows::InputReaderMode;
+
 use std::{collections::VecDeque, num::NonZeroU16, str};
 
 use crate::{
     escape::{
         self,
         csi::{self, Csi, KittyKeyboardFlags, ThemeMode},
-        dcs,
+        dcs, osc,
     },
     event::{
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, MediaKeyCode, ModifierKeyCode, Modifiers,
@@ -30,6 +39,12 @@ pub struct Parser {
     buffer: Vec<u8>,
     /// Events which have been parsed. Pop out with `Self::pop`.
     events: VecDeque<Event>,
+    #[cfg(windows)]
+    mode: InputReaderMode,
+    #[cfg(all(windows, feature = "windows-legacy"))]
+    surrogate_buffer: Option<u16>,
+    #[cfg(all(windows, feature = "windows-legacy"))]
+    mouse_buttons_pressed: legacy::MouseButtonsPressed,
 }
 
 impl Default for Parser {
@@ -37,11 +52,27 @@ impl Default for Parser {
         Self {
             buffer: Vec::with_capacity(256),
             events: VecDeque::with_capacity(32),
+            #[cfg(windows)]
+            mode: InputReaderMode::Vte,
+            #[cfg(all(windows, feature = "windows-legacy"))]
+            surrogate_buffer: None,
+            #[cfg(all(windows, feature = "windows-legacy"))]
+            mouse_buttons_pressed: legacy::MouseButtonsPressed::default(),
         }
     }
 }
 
 impl Parser {
+    // The parser is publicly accessible, but we don't currently expose methods for parsing input records, just VTE.
+    // So there's no need to make this public.
+    #[cfg(windows)]
+    pub(crate) fn with_mode(mode: InputReaderMode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+
     /// Reads and removes a parsed event from the parser.
     pub fn pop(&mut self) -> Option<Event> {
         self.events.pop_front()
@@ -82,64 +113,6 @@ impl Parser {
         let remain = self.buffer.len() - len;
         self.buffer.rotate_left(len);
         self.buffer.truncate(remain);
-    }
-}
-
-// CREDIT: <https://github.com/wezterm/wezterm/blob/a87358516004a652ad840bc1661bdf65ffc89b43/termwiz/src/input.rs#L676-L885>
-// I have dropped the legacy Console API handling however and switched to the `AsciiChar` part of
-// the key record. I suspect that Termwiz may be incorrect here as the Microsoft docs say that the
-// proper way to read UTF-8 is to use the `A` variant (`ReadConsoleInputA` while WezTerm uses
-// `ReadConsoleInputW`) to read a byte.
-#[cfg(windows)]
-mod windows {
-    use windows_sys::Win32::System::Console;
-
-    use crate::{OneBased, WindowSize};
-
-    use super::*;
-
-    impl Parser {
-        pub(crate) fn decode_input_records(&mut self, records: &[Console::INPUT_RECORD]) {
-            for record in records {
-                match record.EventType as u32 {
-                    Console::KEY_EVENT => {
-                        let record = unsafe { record.Event.KeyEvent };
-                        // This skips 'down's. IIRC Termwiz skips 'down's and Crossterm skips
-                        // 'up's. If we skip 'up's we don't seem to get key events at all.
-                        if record.bKeyDown == 0 {
-                            continue;
-                        }
-                        let byte = unsafe { record.uChar.AsciiChar } as u8;
-                        // The zero byte is sent when the input record is not VT.
-                        if byte == 0 {
-                            continue;
-                        }
-                        // `read_console_input` uses `ReadConsoleInputA` so we should treat the
-                        // key code as a byte and add it to the buffer.
-                        self.buffer.push(byte);
-                    }
-                    Console::WINDOW_BUFFER_SIZE_EVENT => {
-                        // NOTE: the `WINDOW_BUFFER_SIZE_EVENT` coordinates are one-based, even
-                        // though `GetConsoleScreenBufferInfo` is zero-based.
-                        let record = unsafe { record.Event.WindowBufferSizeEvent };
-                        let Some(rows) = OneBased::new(record.dwSize.Y as u16) else {
-                            continue;
-                        };
-                        let Some(cols) = OneBased::new(record.dwSize.X as u16) else {
-                            continue;
-                        };
-                        self.events.push_back(Event::WindowResized(WindowSize {
-                            rows: rows.get(),
-                            cols: cols.get(),
-                            pixel_width: None,
-                            pixel_height: None,
-                        }));
-                    }
-                    _ => (),
-                }
-            }
-            self.process_bytes(false);
-        }
     }
 }
 
@@ -197,6 +170,7 @@ fn parse_event(buffer: &[u8], maybe_more: bool) -> Result<Option<Event>> {
                         }
                     }
                     b'[' => parse_csi(buffer),
+                    b']' => parse_osc(buffer),
                     b'P' => parse_dcs(buffer),
                     b'\x1B' => Ok(Some(Event::Key(KeyCode::Escape.into()))),
                     _ => parse_event(&buffer[1..], maybe_more).map(|event_option| {
@@ -345,6 +319,31 @@ fn parse_csi(buffer: &[u8]) -> Result<Option<Event>> {
         _ => bail!(),
     };
     Ok(maybe_event)
+}
+
+fn parse_osc(buffer: &[u8]) -> Result<Option<Event>> {
+    assert!(buffer.starts_with(b"\x1B]"));
+    if !buffer.ends_with(b"\x1B\\") {
+        return Ok(None);
+    }
+    let s = str::from_utf8(&buffer[2..buffer.len() - 2])?;
+    let mut split = s.split(';');
+    let index = next_parsed::<u8>(&mut split)?;
+    let Some(color_number) = osc::DynamicColorNumber::from_index(index) else {
+        bail!()
+    };
+    let Some(color_or_query) = split.next() else {
+        bail!()
+    };
+    let response = match color_or_query {
+        "?" => osc::ColorOrQuery::Query,
+        _ => osc::ColorOrQuery::Color(color_or_query.parse().map_err(|_| MalformedSequenceError)?),
+    };
+    // This parsing could be expanded, see <https://terminalguide.namepad.de/seq/osc-4/>.
+    Ok(Some(Event::Osc(osc::Osc::ChangeDynamicColors(
+        color_number,
+        vec![response],
+    ))))
 }
 
 fn next_parsed<T>(iter: &mut dyn Iterator<Item = &str>) -> Result<T>
@@ -922,9 +921,7 @@ fn parse_csi_cursor_shape_query_response(buffer: &[u8]) -> Result<Option<Event>>
 
     // An empty parameter string (CSI > SP q) is a query.
     if s.is_empty() {
-        return Ok(Some(Event::Csi(Csi::Cursor(
-            csi::Cursor::QueryCursorShape,
-        ))));
+        return Ok(Some(Event::Csi(Csi::Cursor(csi::Cursor::QueryCursorShape))));
     }
 
     let caps: Vec<csi::MultiCursorCapability> = s
@@ -1220,6 +1217,19 @@ mod test {
                     csi::Sgr::Reverse(true),
                 ])
             })
+        );
+    }
+
+    #[test]
+    fn parse_osc_dynamic_color_response() {
+        assert_eq!(
+            parse_event(b"\x1b]11;rgb:2828/2828/2828\x1b\\", false)
+                .unwrap()
+                .unwrap(),
+            Event::Osc(osc::Osc::ChangeDynamicColors(
+                osc::DynamicColorNumber::TextBackgroundColor,
+                vec![style::RgbColor::new(40, 40, 40).into()]
+            ))
         );
     }
 

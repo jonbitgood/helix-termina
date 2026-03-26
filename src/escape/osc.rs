@@ -4,8 +4,9 @@
 
 use std::fmt::{self, Display};
 
-use crate::base64;
+use crate::{base64, style::RgbColor};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Osc<'a> {
     SetIconNameAndWindowTitle(&'a str),
     SetWindowTitle(&'a str),
@@ -15,6 +16,8 @@ pub enum Osc<'a> {
     ClearSelection(Selection),
     QuerySelection(Selection),
     SetSelection(Selection, &'a str),
+    ChangeDynamicColors(DynamicColorNumber, Vec<ColorOrQuery>),
+    ResetDynamicColor(DynamicColorNumber),
     // TODO: I didn't copy many available commands yet...
 }
 
@@ -33,6 +36,13 @@ impl Display for Osc<'_> {
                 // TODO: it'd be nice to avoid allocating a string to base64 encode.
                 write!(f, "52;{selection};{}", base64::encode(content.as_bytes()))?
             }
+            Self::ChangeDynamicColors(color, colors) => {
+                write!(f, "{}", *color as u8)?;
+                for color in colors {
+                    write!(f, ";{color}")?
+                }
+            }
+            Self::ResetDynamicColor(color) => write!(f, "{}", 100 + *color as u8)?,
         }
         f.write_str(super::ST)?;
         Ok(())
@@ -101,5 +111,97 @@ impl Display for Selection {
             write!(f, "9")?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DynamicColorNumber {
+    TextForegroundColor = 10,
+    TextBackgroundColor = 11,
+    TextCursorColor = 12,
+    MouseForegroundColor = 13,
+    MouseBackgroundColor = 14,
+    TektronixForegroundColor = 15,
+    TektronixBackgroundColor = 16,
+    HighlightBackgroundColor = 17,
+    TektronixCursorColor = 18,
+    HighlightForegroundColor = 19,
+}
+
+impl DynamicColorNumber {
+    pub(crate) fn from_index(index: u8) -> Option<Self> {
+        match index {
+            10 => Some(Self::TextForegroundColor),
+            11 => Some(Self::TextBackgroundColor),
+            12 => Some(Self::TextCursorColor),
+            13 => Some(Self::MouseForegroundColor),
+            14 => Some(Self::MouseBackgroundColor),
+            15 => Some(Self::TektronixForegroundColor),
+            16 => Some(Self::TektronixBackgroundColor),
+            17 => Some(Self::HighlightBackgroundColor),
+            18 => Some(Self::TektronixCursorColor),
+            19 => Some(Self::HighlightForegroundColor),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorOrQuery {
+    Color(RgbColor),
+    Query,
+}
+
+impl Display for ColorOrQuery {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ColorOrQuery::Query => write!(f, "?"),
+            ColorOrQuery::Color(c) => {
+                // rgb:RRRR/GGGG/BBBB
+                write!(
+                    f,
+                    "rgb:{red:02x}{red:02x}/{green:02x}{green:02x}/{blue:02x}{blue:02x}",
+                    red = c.red,
+                    green = c.green,
+                    blue = c.blue
+                )
+            }
+        }
+    }
+}
+
+impl From<RgbColor> for ColorOrQuery {
+    fn from(color: RgbColor) -> Self {
+        Self::Color(color)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn encoding() {
+        // OSC 11 query, asks the terminal for the background color.
+        // <https://terminalguide.namepad.de/seq/osc-11/>
+        // <https://terminalguide.namepad.de/seq/osc-4/>
+        assert_eq!(
+            "\x1b]11;?\x1b\\",
+            Osc::ChangeDynamicColors(
+                DynamicColorNumber::TextBackgroundColor,
+                vec![ColorOrQuery::Query]
+            )
+            .to_string()
+        );
+
+        assert_eq!(
+            "\x1b]11;rgb:2828/2828/2828\x1b\\",
+            Osc::ChangeDynamicColors(
+                DynamicColorNumber::TextBackgroundColor,
+                vec![RgbColor::new(40, 40, 40).into()]
+            )
+            .to_string()
+        );
     }
 }

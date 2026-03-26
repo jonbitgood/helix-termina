@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     fs::{self, File},
     io::{self, BufWriter, IsTerminal as _, Write as _},
     mem,
@@ -10,12 +11,15 @@ use windows_sys::Win32::{
     Storage::FileSystem::WriteFile,
     System::Console::{
         self, GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetConsoleScreenBufferInfo,
-        GetNumberOfConsoleInputEvents, ReadConsoleInputA, SetConsoleCP, SetConsoleMode,
-        SetConsoleOutputCP, CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, INPUT_RECORD,
+        GetNumberOfConsoleInputEvents, ReadConsoleInputA, ReadConsoleInputW, SetConsoleCP,
+        SetConsoleMode, SetConsoleOutputCP, CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, INPUT_RECORD,
     },
 };
 
-use crate::{event::source::WindowsEventSource, Event, EventReader, OneBased, WindowSize};
+use crate::{
+    event::source::WindowsEventSource, windows::InputReaderMode, Event, EventReader, OneBased,
+    WindowSize,
+};
 
 use super::Terminal;
 
@@ -86,19 +90,38 @@ impl From<File> for Handle {
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct InputHandle {
     handle: Handle,
+    input_buf: Vec<INPUT_RECORD>,
+    mode: InputReaderMode,
+}
+
+impl fmt::Debug for InputHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InputHandle")
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InputHandle {
-    fn new(handle: Handle) -> Self {
-        Self { handle }
+    fn new(handle: Handle, mode: InputReaderMode) -> Self {
+        let mut input_buf = Vec::with_capacity(BUF_SIZE);
+        let zeroed: INPUT_RECORD = unsafe { mem::zeroed() };
+        input_buf.resize(BUF_SIZE, zeroed);
+
+        Self {
+            handle,
+            mode,
+            input_buf,
+        }
     }
 
     fn try_clone(&self) -> io::Result<Self> {
         Ok(Self {
             handle: self.handle.try_clone()?,
+            input_buf: self.input_buf.clone(),
+            mode: self.mode,
         })
     }
 
@@ -145,33 +168,48 @@ impl InputHandle {
         Ok(())
     }
 
-    pub fn get_number_of_input_events(&mut self) -> io::Result<usize> {
+    pub fn has_pending_input_events(&mut self) -> io::Result<bool> {
         let mut num = 0;
+        // Since we use UTF-8 code pages and call ReadConsoleInputA to read UTF-8 data,
+        // we can't rely on the result from GetNumberOfConsoleInputEvents.
+        // Its return value matches the result from ReadConsoleInputW, which may not be the
+        // same when typing some Unicode values.
+        // Instead, we can just use it as a quick check to see if events are available.
         if unsafe { GetNumberOfConsoleInputEvents(self.as_raw_handle(), &mut num) } == 0 {
             bail!(
                 "failed to read input console number of pending events: {}",
                 io::Error::last_os_error()
             );
         }
-        Ok(num as usize)
+        Ok(num > 0)
     }
 
-    pub fn read_console_input(&mut self, num_events: usize) -> io::Result<Vec<INPUT_RECORD>> {
-        let mut res = Vec::with_capacity(num_events);
-        let zeroed: INPUT_RECORD = unsafe { mem::zeroed() };
-        res.resize(num_events, zeroed);
+    pub fn read_console_input(&mut self) -> io::Result<&[INPUT_RECORD]> {
         let mut num = 0;
         // NOTE: <https://learn.microsoft.com/en-us/windows/console/classic-vs-vt#unicode>
         // > UTF-8 support in the console can be utilized via the A variant of Console APIs
         // > against console handles after setting the codepage to 65001 or CP_UTF8 with the
         // > SetConsoleOutputCP and SetConsoleCP methods, as appropriate.
         if unsafe {
-            ReadConsoleInputA(
-                self.as_raw_handle(),
-                res.as_mut_ptr(),
-                num_events as u32,
-                &mut num,
-            )
+            match self.mode {
+                InputReaderMode::Vte => ReadConsoleInputA(
+                    self.as_raw_handle(),
+                    self.input_buf.as_mut_ptr(),
+                    self.input_buf.capacity() as u32,
+                    &mut num,
+                ),
+                InputReaderMode::Legacy =>
+                // ReadConsoleInputA seems to have an issue that causes extra characters to be appended to some unicode characters.
+                // Could be the same issue as this: https://github.com/microsoft/terminal/issues/19436
+                {
+                    ReadConsoleInputW(
+                        self.as_raw_handle(),
+                        self.input_buf.as_mut_ptr(),
+                        self.input_buf.capacity() as u32,
+                        &mut num,
+                    )
+                }
+            }
         } == 0
         {
             bail!(
@@ -179,8 +217,8 @@ impl InputHandle {
                 io::Error::last_os_error()
             );
         }
-        unsafe { res.set_len(num as usize) };
-        Ok(res)
+        unsafe { self.input_buf.set_len(num as usize) };
+        Ok(&self.input_buf)
     }
 }
 
@@ -292,7 +330,7 @@ impl io::Write for OutputHandle {
     }
 }
 
-fn open_pty() -> io::Result<(InputHandle, OutputHandle)> {
+fn open_pty(mode: InputReaderMode) -> io::Result<(InputHandle, OutputHandle)> {
     let input = if io::stdin().is_terminal() {
         Handle::stdin()
     } else {
@@ -303,7 +341,7 @@ fn open_pty() -> io::Result<(InputHandle, OutputHandle)> {
     } else {
         open_file("CONOUT$")?.into()
     };
-    Ok((InputHandle::new(input), OutputHandle::new(output)))
+    Ok((InputHandle::new(input, mode), OutputHandle::new(output)))
 }
 
 fn open_file(path: &str) -> io::Result<File> {
@@ -325,18 +363,36 @@ pub struct WindowsTerminal {
     original_input_cp: CodePageID,
     original_output_cp: CodePageID,
     has_panic_hook: bool,
+    mode: InputReaderMode,
 }
 
 impl WindowsTerminal {
+    /// Creates a new terminal that reads using [VTE mode][InputReaderMode::Vte].
     pub fn new() -> io::Result<Self> {
-        let (mut input, mut output) = open_pty()?;
+        Self::with_mode_internal(InputReaderMode::Vte)
+    }
+
+    /// Creates a new terminal using the specified [InputReaderMode].
+    #[cfg(feature = "windows-legacy")]
+    pub fn with_mode(mode: InputReaderMode) -> io::Result<Self> {
+        // This is only exposed publicly when `windows-legacy` is enabled
+        // because creating an instance with `InputReaderMode::Legacy`
+        // without the appropriate parsing mechanisms enabled will
+        // result in no events being parsed.
+        Self::with_mode_internal(mode)
+    }
+
+    fn with_mode_internal(mode: InputReaderMode) -> io::Result<Self> {
+        let (mut input, mut output) = open_pty(mode)?;
 
         let original_input_mode = input.get_mode()?;
         let original_output_mode = output.get_mode()?;
         let original_input_cp = input.get_code_page()?;
         let original_output_cp = output.get_code_page()?;
-        input.set_code_page(CP_UTF8)?;
-        output.set_code_page(CP_UTF8)?;
+        if mode == InputReaderMode::Vte {
+            input.set_code_page(CP_UTF8)?;
+            output.set_code_page(CP_UTF8)?;
+        }
 
         // Enable VT processing for the output handle.
         let desired_output_mode = original_output_mode
@@ -345,13 +401,16 @@ impl WindowsTerminal {
         if output.set_mode(desired_output_mode).is_err() {
             bail!("virtual terminal processing could not be enabled for the output handle");
         }
-        // And now the input handle too.
-        let desired_input_mode = original_input_mode | Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
-        if input.set_mode(desired_input_mode).is_err() {
-            bail!("virtual terminal processing could not be enabled for the input handle");
+
+        if mode == InputReaderMode::Vte {
+            // And now the input handle too.
+            let desired_input_mode = original_input_mode | Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
+            if input.set_mode(desired_input_mode).is_err() {
+                bail!("virtual terminal processing could not be enabled for the input handle");
+            }
         }
 
-        let reader = EventReader::new(WindowsEventSource::new(input.try_clone()?)?);
+        let reader = EventReader::new(WindowsEventSource::new(input.try_clone()?, mode)?);
 
         Ok(Self {
             input,
@@ -361,6 +420,7 @@ impl WindowsTerminal {
             original_output_mode,
             original_input_cp,
             original_output_cp,
+            mode,
             has_panic_hook: false,
         })
     }
@@ -431,8 +491,9 @@ impl Terminal for WindowsTerminal {
         let original_output_cp = self.original_output_cp;
         let original_output_mode = self.original_output_mode;
         let hook = std::panic::take_hook();
+        let mode = self.mode;
         std::panic::set_hook(Box::new(move |info| {
-            if let Ok((mut input, mut output)) = open_pty() {
+            if let Ok((mut input, mut output)) = open_pty(mode) {
                 f(&mut output);
                 let _ = input.set_code_page(original_input_cp);
                 let _ = input.set_mode(original_input_mode);

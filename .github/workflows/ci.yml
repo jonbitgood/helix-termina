@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
 env:
-  MSRV: "1.70"
+  MSRV: "1.71"
 jobs:
   check:
     name: Check

@@ -694,6 +694,15 @@ pub enum Cursor {
     ClearSecondaryCursors,
 }
 
+impl Cursor {
+    pub const fn default_position() -> Self {
+        Self::Position {
+            line: OneBased::from_zero_based(0),
+            col: OneBased::from_zero_based(0),
+        }
+    }
+}
+
 impl Display for Cursor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn write_csi<T: Default + Eq + Display>(

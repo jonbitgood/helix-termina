@@ -3,7 +3,7 @@
 // `InternalEvent` and `Event`. Otherwise all `KeyEvent` code is nearly identical to crossterm.
 
 use crate::{
-    escape::{csi::Csi, dcs::Dcs},
+    escape::{csi::Csi, dcs::Dcs, osc::Osc},
     WindowSize,
 };
 
@@ -29,13 +29,15 @@ pub enum Event {
     Paste(String),
     /// A parsed escape sequence starting with CSI (control sequence introducer).
     Csi(Csi),
+    /// A parsed escape sequence starting with OSC (operating system command).
+    Osc(Osc<'static>),
     Dcs(Dcs),
 }
 
 impl Event {
     #[inline]
     pub fn is_escape(&self) -> bool {
-        matches!(self, Self::Csi(_) | Self::Dcs(_))
+        matches!(self, Self::Csi(_) | Self::Dcs(_) | Self::Osc(_))
     }
 }
 
