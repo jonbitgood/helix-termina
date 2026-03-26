@@ -465,15 +465,6 @@ pub enum MultiCursorShape {
     FollowMainCursor,
 }
 
-impl MultiCursorShape {
-    pub fn protocol_value(&self) -> u8 {
-        match self {
-            Self::Style(style) => *style as u8,
-            Self::FollowMainCursor => 29,
-        }
-    }
-}
-
 impl TryFrom<u8> for MultiCursorShape {
     type Error = u8;
 
@@ -491,37 +482,22 @@ impl TryFrom<u8> for MultiCursorShape {
 /// corresponds to a protocol operation code the terminal advertises support for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MultiCursorCapability {
-    /// Block cursor shape (code 1).
-    BlockShape,
-    /// Beam cursor shape (code 2).
-    BeamShape,
-    /// Underline cursor shape (code 3).
-    UnderlineShape,
-    /// Follow the main cursor's shape (code 29).
-    FollowMainCursorShape,
-    /// Change the color of text under extra cursors (code 30).
-    TextColor,
-    /// Change the color of extra cursors (code 40).
-    CursorColor,
-    /// Query currently set cursors (code 100).
-    QueryCurrentCursors,
-    /// Query extra cursor colors (code 101).
-    QueryColors,
-}
-
-impl MultiCursorCapability {
-    pub fn code(self) -> u8 {
-        match self {
-            Self::BlockShape => 1,
-            Self::BeamShape => 2,
-            Self::UnderlineShape => 3,
-            Self::FollowMainCursorShape => 29,
-            Self::TextColor => 30,
-            Self::CursorColor => 40,
-            Self::QueryCurrentCursors => 100,
-            Self::QueryColors => 101,
-        }
-    }
+    /// Block cursor shape.
+    BlockShape = 1,
+    /// Beam cursor shape.
+    BeamShape = 2,
+    /// Underline cursor shape.
+    UnderlineShape = 3,
+    /// Follow the main cursor's shape.
+    FollowMainCursorShape = 29,
+    /// Change the color of text under extra cursors.
+    TextColor = 30,
+    /// Change the color of extra cursors.
+    CursorColor = 40,
+    /// Query currently set cursors.
+    QueryCurrentCursors = 100,
+    /// Query extra cursor colors.
+    QueryColors = 101,
 }
 
 impl TryFrom<u8> for MultiCursorCapability {
@@ -764,12 +740,19 @@ impl Display for Cursor {
                     if i > 0 {
                         write!(f, ";")?;
                     }
-                    write!(f, "{}", cap.code())?;
+                    write!(f, "{}", *cap as u8)?;
                 }
                 write!(f, " q")
             }
             Cursor::SetMultipleCursors { shape, positions } => {
-                write!(f, ">{}", shape.protocol_value())?;
+                write!(
+                    f,
+                    ">{}",
+                    match shape {
+                        MultiCursorShape::Style(style) => *style as u8,
+                        MultiCursorShape::FollowMainCursor => 29,
+                    }
+                )?;
                 for (line, col) in positions {
                     write!(f, ";2:{}:{}", line, col)?;
                 }
