@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- ## [Unreleased] -->
 
+## [v0.3.0] - 2026-03-26
+
+### Added
+
+* Add parsing of OSC dynamic color sequences from the terminal. ([980077903880](https://github.com/helix-editor/termina/commit/980077903880))
+
+### Fixed
+
+* Catch OSC sequences in the `Event::is_escape` predicate. ([3c1e399b8dd1](https://github.com/helix-editor/termina/commit/3c1e399b8dd1))
+
 ## [v0.2.0] - 2026-03-14
 
 ### Added
