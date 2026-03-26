@@ -465,17 +465,6 @@ pub enum MultiCursorShape {
     FollowMainCursor,
 }
 
-impl TryFrom<u8> for MultiCursorShape {
-    type Error = u8;
-
-    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
-        match value {
-            29 => Ok(Self::FollowMainCursor),
-            _ => CursorStyle::try_from(value).map(Self::Style),
-        }
-    }
-}
-
 /// Supported operations in the kitty multi-cursor protocol.
 ///
 /// Returned in the capability query response (`CSI > SP q`). Each variant
@@ -1679,23 +1668,5 @@ mod test {
             "\x1b[>0;4 q",
             Csi::Cursor(Cursor::ClearSecondaryCursors).to_string()
         );
-    }
-
-    #[test]
-    fn multi_cursor_shape_try_from() {
-        assert_eq!(
-            MultiCursorShape::try_from(0),
-            Ok(MultiCursorShape::Style(CursorStyle::Default))
-        );
-        assert_eq!(
-            MultiCursorShape::try_from(2),
-            Ok(MultiCursorShape::Style(CursorStyle::SteadyBlock))
-        );
-        assert_eq!(
-            MultiCursorShape::try_from(29),
-            Ok(MultiCursorShape::FollowMainCursor)
-        );
-        assert_eq!(MultiCursorShape::try_from(7), Err(7));
-        assert_eq!(MultiCursorShape::try_from(28), Err(28));
     }
 }

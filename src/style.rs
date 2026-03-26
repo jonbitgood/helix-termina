@@ -53,23 +53,6 @@ impl Display for CursorStyle {
     }
 }
 
-impl TryFrom<u8> for CursorStyle {
-    type Error = u8;
-
-    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Default),
-            1 => Ok(Self::BlinkingBlock),
-            2 => Ok(Self::SteadyBlock),
-            3 => Ok(Self::BlinkingUnderline),
-            4 => Ok(Self::SteadyUnderline),
-            5 => Ok(Self::BlinkingBar),
-            6 => Ok(Self::SteadyBar),
-            _ => Err(value),
-        }
-    }
-}
-
 /// An 8-bit "256-color".
 ///
 /// Colors 0-15 are the same as `AnsiColor`s (0-7 being normal colors and 8-15 being "bright").
@@ -454,23 +437,5 @@ mod test {
         assert_eq!("#282828".parse(), Ok(RgbColor::new(40, 40, 40)));
         assert_eq!("rgb:28/28/28".parse(), Ok(RgbColor::new(40, 40, 40)));
         assert_eq!("rgb:2828/2828/2828".parse(), Ok(RgbColor::new(40, 40, 40)));
-    }
-
-    #[test]
-    fn cursor_style_try_from_valid() {
-        assert_eq!(CursorStyle::try_from(0), Ok(CursorStyle::Default));
-        assert_eq!(CursorStyle::try_from(1), Ok(CursorStyle::BlinkingBlock));
-        assert_eq!(CursorStyle::try_from(2), Ok(CursorStyle::SteadyBlock));
-        assert_eq!(CursorStyle::try_from(3), Ok(CursorStyle::BlinkingUnderline));
-        assert_eq!(CursorStyle::try_from(4), Ok(CursorStyle::SteadyUnderline));
-        assert_eq!(CursorStyle::try_from(5), Ok(CursorStyle::BlinkingBar));
-        assert_eq!(CursorStyle::try_from(6), Ok(CursorStyle::SteadyBar));
-    }
-
-    #[test]
-    fn cursor_style_try_from_invalid() {
-        assert_eq!(CursorStyle::try_from(7), Err(7));
-        assert_eq!(CursorStyle::try_from(29), Err(29));
-        assert_eq!(CursorStyle::try_from(255), Err(255));
     }
 }
