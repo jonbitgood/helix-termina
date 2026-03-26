@@ -37,7 +37,7 @@ pub enum Event {
 impl Event {
     #[inline]
     pub fn is_escape(&self) -> bool {
-        matches!(self, Self::Csi(_) | Self::Dcs(_))
+        matches!(self, Self::Csi(_) | Self::Dcs(_) | Self::Osc(_))
     }
 }
 
