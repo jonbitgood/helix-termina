@@ -1686,9 +1686,7 @@ mod test {
             "\x1b[>2;2:3:10 q",
             Csi::Cursor(Cursor::SetMultipleCursors {
                 shape: MultiCursorShape::Style(CursorStyle::SteadyBlock),
-                positions: vec![
-                    (OneBased::new(3).unwrap(), OneBased::new(10).unwrap()),
-                ],
+                positions: vec![(OneBased::new(3).unwrap(), OneBased::new(10).unwrap()),],
             })
             .to_string()
         );
