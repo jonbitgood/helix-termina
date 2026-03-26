@@ -934,7 +934,7 @@ fn parse_csi_cursor_shape_query_response(buffer: &[u8]) -> Result<Option<Event>>
                     csi::MultiCursorCapability::try_from(v).map_err(|_| MalformedSequenceError)
                 })
         })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(Some(Event::Csi(Csi::Cursor(
         csi::Cursor::CursorShapeQueryResponse(caps),
